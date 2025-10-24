@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Group Chat Sekolah</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#7dd3fc;--muted:#9ca3af;color-scheme:dark}
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071028 0%,#021018 100%);font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    .wrap{max-width:880px;margin:28px auto;padding:18px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;box-shadow:0 6px 30px rgba(2,6,23,0.7)}
+    h1{margin:0 0 8px;font-size:20px;color:var(--accent)}
+    .meta{display:flex;gap:8px;align-items:center;margin-bottom:14px}
+    .meta input{padding:8px;border-radius:8px;border:1px solid #123046;background:transparent;color:#e6eef8}
+    .meta button{padding:8px 12px;border-radius:8px;border:0;background:var(--accent);color:#012;cursor:pointer}
+    .chat{height:520px;background:rgba(255,255,255,0.02);border-radius:10px;padding:12px;overflow:auto;border:1px solid rgba(255,255,255,0.02)}
+    .message{margin-bottom:10px}
+    .me{background:linear-gradient(90deg,rgba(125,211,252,0.12),rgba(125,211,252,0.06));padding:8px 12px;border-radius:10px;display:inline-block}
+    .other{background:rgba(255,255,255,0.02);padding:8px 12px;border-radius:10px;display:inline-block}
+    .ts{font-size:11px;color:var(--muted);margin-left:8px}
+    .composer{display:flex;gap:8px;margin-top:12px}
+    .composer input{flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:#e6eef8}
+    .composer button{padding:10px 16px;border-radius:10px;border:0;background:var(--accent);color:#012;cursor:pointer}
+    .hint{font-size:13px;color:var(--muted);margin-top:8px}
+    small.warn{color:#ff9b9b}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Group Chat — Untuk Satu Sekolah Sahaja</h1>
+    <div class="meta">
+      <input id="schoolCodeInput" placeholder="secret code" autocomplete="off">
+      <input id="nameInput" placeholder="Nama panggilan" autocomplete="off">
+      <button id="joinBtn">Join</button>
+      <div style="flex:1"></div>
+      <small class="hint">Buat folder dan muat naik satu fail ini. Guna GitHub Pages / Firebase Hosting / mana-mana hosting statik.</small>
+    </div>
+
+    <div id="chatContainer" style="display:none">
+      <div class="chat" id="chat"></div>
+      <div class="composer">
+        <input id="msgInput" placeholder="Taip mesej..." autocomplete="off">
+        <button id="sendBtn">Hantar</button>
+      </div>
+      <div class="hint"><small>Mesra mudah alih. Mesej disimpan di Firebase Realtime Database. <span class="warn">Jangan kongsi kod sekolah jika anda mahu kumpulan tertutup.</span></small></div>
+    </div>
+  </div>
+
+  <!-- Firebase (compat) - replace config below with your project's config -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script>
+    // 
+    const firebaseConfig = {
+  apiKey: "AIzaSyDjrMjFVoo6M-cNb4lMSo9ZW9_yDjaEOTA",
+  authDomain: "koloh-kijal-je.firebaseapp.com",
+  projectId: "koloh-kijal-je",
+  storageBucket: "koloh-kijal-je.firebasestorage.app",
+  messagingSenderId: "585782259661",
+  appId: "1:585782259661:web:d5b321cc5f6f303b045e84",
+  measurementId: "G-PQ8CXFRGQS"};
+
+    // Kod sekolah yang dibenarkan 
+    // Cara kerja: pengguna mesti masukkan kod yang sama untuk join. Simpan kod ini rahsia di pihak pentadbir.
+    const allowedSchoolCode = 'SMKKIJAL2025'; // 
+
+    // Init Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Elemen
+    const joinBtn = document.getElementById('joinBtn');
+    const schoolCodeInput = document.getElementById('schoolCodeInput');
+    const nameInput = document.getElementById('nameInput');
+    const chatContainer = document.getElementById('chatContainer');
+    const chatEl = document.getElementById('chat');
+    const msgInput = document.getElementById('msgInput');
+    const sendBtn = document.getElementById('sendBtn');
+
+    let currentSchool = null;
+    let displayName = null;
+
+    function escapeHtml(s){
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    joinBtn.addEventListener('click', ()=>{
+      const code = (schoolCodeInput.value || '').trim();
+      const name = (nameInput.value || '').trim();
+      if(!code || !name){ alert('Isi kod sekolah dan nama dulu.'); return; }
+
+      // Periksa kod sekolah — hanya satu kod dibenarkan (boleh ubah logik jika nak lebih fleksibel)
+      if(code !== allowedSchoolCode){ alert('Kod sekolah tidak sah untuk chat ini.'); return; }
+
+      currentSchool = code;
+      displayName = name;
+      chatContainer.style.display = 'block';
+      schoolCodeInput.disabled = true;
+      nameInput.disabled = true;
+      joinBtn.disabled = true;
+
+      startListeningMessages();
+    });
+
+    // Hantar mesej
+    sendBtn.addEventListener('click', sendMessage);
+    msgInput.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') sendMessage(); });
+
+    function sendMessage(){
+      const text = (msgInput.value || '').trim();
+      if(!text || !currentSchool) return;
+      const safeText = escapeHtml(text);
+      const payload = { name: displayName, text: safeText, ts: Date.now() };
+      const ref = db.ref('schools/' + currentSchool + '/messages');
+      ref.push(payload).catch(err=>{ console.error(err); alert('Gagal hantar.'); });
+      msgInput.value = '';
+    }
+
+    // Dengar mesej baru (real-time)
+    function startListeningMessages(){
+      const ref = db.ref('schools/' + currentSchool + '/messages');
+      // hadkan pada 200 mesej terakhir
+      ref.limitToLast(200).on('child_added', snapshot=>{
+        const m = snapshot.val();
+        renderMessage(m);
+      });
+    }
+
+    function timeAgo(ts){
+      const d = new Date(ts);
+      return d.toLocaleString();
+    }
+
+    function renderMessage(m){
+      const isMe = m.name === displayName;
+      const wrapper = document.createElement('div');
+      wrapper.className = 'message';
+      const bubble = document.createElement('div');
+      bubble.className = isMe ? 'me' : 'other';
+      bubble.innerHTML = '<strong>' + escapeHtml(m.name) + '</strong>: ' + escapeHtml(m.text) + ' <span class="ts">' + timeAgo(m.ts) + '</span>';
+      wrapper.appendChild(bubble);
+      chatEl.appendChild(wrapper);
+      // scroll to bottom
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    // Optional: fungsi untuk clear history (pentadbir sahaja) — jangan panggil tanpa berhati-hati
+    async function clearChat(){
+      if(!confirm('Padam semua mesej untuk sekolah ini?')) return;
+      await db.ref('schools/' + currentSchool + '/messages').remove();
+      chatEl.innerHTML = '';
+    }
+
+    // END
+  </script>
+</body>
+</html>
